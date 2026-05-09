@@ -1,0 +1,46 @@
+# Basic goals (A)
+- goals that are essential for the basic functionality
+
+1. PDB ID input
+    - user provides list of pdb ids.
+    - there should be some kind of sanity check to ensure IDs are valid (completly locally)
+    - optionally there should be some way of providing ids in different ways (as a part of the command, as a file etc.)
+2. download of structures
+    - after basic sane IDs are provided, the app needs to download them
+    - basic source will be RCSB PDB, however there should be way to lookup the proteins in different DBs
+3. filter of ligands
+    - the downloaded file contains many ligands ("molecules"). most of them are some junk like water molecules etc. we need to find the correct one
+    - the app should filter out common molecules we know are contaminants
+    - then it should probably pick the biggest ligand of them all? idk
+4. calculation of rules
+    - for each found ligand each of the following rules should be calculated
+    1. Molecular Weight (M) - sum of all atoms in the ligand
+    2. Hydrogen Bond Donors Count (D) - counting all Nitrogen and Oxygen atoms that have at least one hydrogen atom attached to them.
+    3. Hydrogen Bond Acceptor Count (A) - the total number of Nitrogen and Oxygen atoms present in the molecule, regardless of their hydrogen state.
+    4. Lipophilicity (L) - Fetch this value from the PubChem registry. There are multiple approaches to this. Find the most reliable one and use that.
+5. export
+    - the data should be exported in some kind of JSON that summarises the results
+6. visualisation
+    - The final results should be visualised in some graphs that show how much do the atoms fall in the lipinsky sweet spot
+
+# Essential goals (B)
+- goals that are required, but not needed for the app to be useful
+
+1. command line usage
+    - each option should be able to be chosen from a command line
+2. optimalisation for fast usage (at least 30 proteins)
+    - paralelisation?
+    - some optimalisations of the existing code?
+    - Cython?
+3. autosaving for potential interrupt prevention
+    - if the program crashes, the progress should be able to continue from where it left of
+
+# Plus goals (C)
+- additional goals that we can add
+
+1. hydrogen bond comparison
+    - calculate own bond number, and compare it with the db
+2. extra filtering
+    - more filters to check the usefulnes of this ligand
+3. identifaction of problematic minorities
+    - find the problematic part of the protein and visualise it
