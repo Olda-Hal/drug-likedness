@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drug-likedness"
+version = "0.1.0"
+description = "Drug Likeness Analyzer"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "CDL" }
+authors = [ { name = "Author", email = "you@example.com" } ]
+dependencies = [
+	"requests>=2.0"
+]
+
+[project.urls]
+Homepage = "https://example.com"
+
+[tool.mypy]
+# Use a permissive/basic configuration so type-checking is not strict by default
+python_version = "3.14"
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-q"
+testpaths = ["tests"]
+
