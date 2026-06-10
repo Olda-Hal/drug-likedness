@@ -1,2 +1,4 @@
 requests
 gemmi
+matplotlib
+numpy
