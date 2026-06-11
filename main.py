@@ -7,7 +7,6 @@ import re
 import requests
 from datetime import datetime
 from property_funcs import *
-import matplotlib.pyplot as plt
 import numpy as np
 from visualisation import *
 
@@ -224,83 +223,18 @@ def visualize_results(data: list[tuple[str, gemmi.Residue, LipinskiData]], compa
     hb_donors_pubchem = [item[2][3] if item[2][3] is not None else np.nan for item in data]
     hb_acceptors_pubchem = [item[2][4] if item[2][4] is not None else np.nan for item in data]
     lipophilicities = [item[2][5] if item[2][5] is not None else np.nan for item in data]
+    lipinsky_results = [item[2][6] for item in data]
 
-    # 2. Initialize plots (2x2 grid)
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    fig.suptitle("Parameter Analysis - Lipinski's Rule of Five", fontsize=16, fontweight='bold')
-    
-    x = np.arange(len(names))
-    width = 0.35
+    graph_generator(names, mol_weights, hb_donors_local, hb_acceptors_local,
+                    hb_donors_pubchem, hb_acceptors_pubchem, lipophilicities,
+                    lipinsky_results, compare)
 
-    # --- PLOT 1: Molecular Weight (Limit <= 500 Da) ---
-    ax1 = axes[0, 0]
-    # Zero is unlikely for MW, but for safety (e.g., 5 Da for visibility)
-    mw_vis = ensure_visible_zeros(mol_weights, 5.0) 
-    ax1.bar(x, mw_vis, color="skyblue", edgecolor='black', linewidth=0.5)
-    ax1.set_title("Molecular Weight", fontsize=12)
-    ax1.set_ylabel("Da")
-    max_mw = max(mol_weights) if mol_weights else 500
-    draw_limit(ax1, 500, max_mw, "Ro5 Limit")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(names, rotation=45, ha='right')
-    ax1.legend()
 
-    # --- PLOT 2: Lipophilicity (Limit <= 5) ---
-    ax2 = axes[0, 1]
-    # LogP can be zero, plot thin line 0.05
-    lipo_vis = ensure_visible_zeros(lipophilicities, 0.05)
-    ax2.bar(x, lipo_vis, color="skyblue", edgecolor='black', linewidth=0.5)
-    ax2.set_title("Lipophilicity (LogP)", fontsize=12)
-    ax2.set_ylabel("LogP")
-    draw_limit(ax2, 5, 8, "Ro5 Limit")
-    ax2.set_ylim(-8, 8)
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(names, rotation=45, ha='right')
-    ax2.legend()
-
-    # --- PLOT 3: HB Donors (Limit <= 5) ---
-    ax3 = axes[1, 0]
-    # Replace zeros with visual height 0.1
-    hbd_loc_vis = ensure_visible_zeros(hb_donors_local, 0.1)
-    hbd_pub_vis = ensure_visible_zeros(hb_donors_pubchem, 0.1)
-    
-    
-    if compare:
-        ax3.bar(x - width/2, hbd_loc_vis, width, label='Local calculation', color='skyblue', edgecolor='black', linewidth=0.5)
-        ax3.bar(x + width/2, hbd_pub_vis, width, label='PubChem', color='orange', edgecolor='black', linewidth=0.5)
-    else:
-        ax3.bar(x, hbd_loc_vis, width, label='Local calculation', color='skyblue', edgecolor='black', linewidth=0.5)
-    ax3.set_title("Hydrogen Bond Donors", fontsize=12)
-    
-    max_hbd = max(max(hb_donors_local) if hb_donors_local else 0, max([v for v in hb_donors_pubchem if not np.isnan(v)], default=0))
-    draw_limit(ax3, 5, max_hbd, "Ro5 Limit")
-    ax3.set_xticks(x)
-    ax3.set_xticklabels(names, rotation=45, ha='right' if compare else "center")
-    ax3.legend()
-
-    # --- PLOT 4: HB Acceptors (Limit <= 10) ---
-    ax4 = axes[1, 1]
-    # Replace zeros with visual height 0.2
-    hba_loc_vis = ensure_visible_zeros(hb_acceptors_local, 0.2)
-    hba_pub_vis = ensure_visible_zeros(hb_acceptors_pubchem, 0.2)
-    
-    if compare:
-        ax4.bar(x - width/2, hba_loc_vis, width, label='Local calculation', color='skyblue', edgecolor='black', linewidth=0.5)
-        ax4.bar(x + width/2, hba_pub_vis, width, label='PubChem', color='orange', edgecolor='black', linewidth=0.5)
-    else:
-        ax4.bar(x, hba_loc_vis, width, label='Local calculation', color='skyblue', edgecolor='black', linewidth=0.5)
-    ax4.set_title("Hydrogen Bond Acceptors", fontsize=12)
-    
-    max_hba = max(max(hb_acceptors_local) if hb_acceptors_local else 0, max([v for v in hb_acceptors_pubchem if not np.isnan(v)], default=0))
-    draw_limit(ax4, 10, max_hba, "Ro5 Limit")
-    ax4.set_xticks(x)
-    ax4.set_xticklabels(names, rotation=45, ha='right')
-    ax4.legend()
-
-    # Finalization and display
-    plt.tight_layout(rect=(0, 0, 1, 0.96))
-    plt.show()
-
+# creates a file describing a query from the user. 
+# this file will be deleted after final export. 
+# If any file is found it will be able to continue the previous query in case of an error or a crash.
+def query_job():
+    pass
 
 if __name__ == "__main__":
     # -------------------------------- [ Parsing arguments ] --------------------------------
