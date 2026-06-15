@@ -31,6 +31,7 @@ def _run_speed_test(pdb_ids: Iterable[str]) -> float:
 		"-i",
 		*list(pdb_ids),
 		"-x",
+        "-q"
 	]
 
 	start = time.perf_counter()

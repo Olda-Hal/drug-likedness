@@ -10,6 +10,10 @@ from property_funcs import *
 import numpy as np
 from visualisation import *
 import tempfile
+import io
+import zipfile
+import gzip
+import shutil
 
 # mol weight, hb_donor_count, hb_acceptor_count, hb_donor_count_pubchem, hb_acceptor_count_pubchem, lipophilicity, satisfies_rules
 LipinskiData = tuple[float, int, int, int | None, int | None, float | None, bool]
@@ -30,24 +34,6 @@ def parse_input(file_path: str, verbose: bool) -> list[str]:
         return pdb_ids
 
     raise ValueError("Invalid input file path provided.")
-
-
-def check_pdb_ids(pdb_ids: list[str], error: bool,
-                  verbose: bool) -> list[str]:
-    new_pdb_ids = []
-    for pdb_id in pdb_ids:
-        pdb_id = pdb_id.strip().lower()  # sanitize input
-        if len(pdb_id) == 4:  # convert old ID format to new format
-            pdb_id = "pdb_0000" + pdb_id
-        if bool(re.match(r"^pdb_[0-9a-z]{8}$", pdb_id)):
-            new_pdb_ids.append(pdb_id)
-        elif error:
-            raise ValueError(f"An invalid PDB ID was provided: {pdb_id}.")
-        elif verbose:
-            print(f"An invalid PDB ID was provided: {pdb_id}. Skipping.")
-
-    return new_pdb_ids
-
 
 def download_structure(pdb_id: str, db: str,
                         error: bool, verbose: bool) -> str | None:
@@ -74,6 +60,32 @@ def download_structure(pdb_id: str, db: str,
     if verbose:
         print()
 
+# uses quick batch downloader that can crash more easily, but is faster than the single download function.
+def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose: bool) -> list[str]:
+    # batch can be only 50 pdb_ids at once, so we need to split the list into chunks of 50
+    pdb_id_chunks = [pdb_ids[i:i + 50] for i in range(0, len(pdb_ids), 50)]
+
+    downloaded_pdb_ids = []
+    for chunk in pdb_id_chunks:
+        files = ":".join(f"{pdb}.cif" for pdb in chunk)
+        url = f"https://download.rcsb.org/batch/structures/{files}"
+        response = requests.get(url)
+        if error:
+            response.raise_for_status()
+        
+        if response.status_code == 200:
+            zf = zipfile.ZipFile(io.BytesIO(response.content))
+            downloaded_pdb_ids.extend(chunk)
+            for name in zf.namelist():
+                zf.extract(name, "downloads/")
+                # un gzip all the files if they are gzipped, and remove the gzipped version
+                if name.endswith(".gz"):
+                    with gzip.open(f"downloads/{name}", 'rb') as f_in:
+                        with open(f"downloads/{name[:-3]}", 'wb') as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                    pathlib.Path(f"downloads/{name}").unlink()  # remove the gzipped version
+    return downloaded_pdb_ids
+    
 
 def filter_ligands(pdb_ids: list[str]) -> list[tuple[str, gemmi.Residue]]:
     result_ligands = []
@@ -84,6 +96,10 @@ def filter_ligands(pdb_ids: list[str]) -> list[tuple[str, gemmi.Residue]]:
     }
 
     for pdb_id in pdb_ids:
+        pdb_id = pdb_id.lower()
+        if not pathlib.Path(f"downloads/{pdb_id}.cif").is_file():
+            print(f"PDB file for ID {pdb_id} not found in downloads. Skipping.")
+            continue
         structure = gemmi.read_structure("downloads/" + pdb_id + ".cif")
         most_significant_ligand = None
         best_ha_count = 0  # highest heavy atom count
@@ -359,7 +375,7 @@ def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.
 
     return completed_data
 
-if __name__ == "__main__":
+def pipeline():
     # -------------------------------- [ Parsing arguments ] --------------------------------
 
     parser = argparse.ArgumentParser(description="Drug Likeness Analyzer")
@@ -381,7 +397,10 @@ if __name__ == "__main__":
                         help="Enables comparing PubChem registry values with calculated values. (Disabled by default.)")
     parser.add_argument("-r", "--retry", action="store_true",
                         help="Enables retrying a previous query if it was interrupted. (Disabled by default.)")
+    parser.add_argument("-q", "--quick", action="store_true",
+                        help="Enables quick mode for fast results. Disables many less necessary checks and features, including resume/progress saving. (Disabled by default.) [EXPERIMENTAL]")
     args = parser.parse_args()
+    quick_mode = args.quick
     query_data: dict | None = None
     completed_result_data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]] = []
     completed_pdb_ids: set[str] = set()
@@ -389,7 +408,8 @@ if __name__ == "__main__":
     # ---------------------------------------------------------------------------------------
 
     # ------------------------------ [ Validating arguments ] -------------------------------
-    if args.retry:
+    use_resume = args.retry
+    if use_resume:
         query_data = retry_job()
         if query_data is not None:
             resumed_args = {k: v for k, v in query_data.items() if k not in {"results", "processed_pdb_ids"}}
@@ -410,8 +430,6 @@ if __name__ == "__main__":
     pdb_ids = args.ids
     if args.input_path:
         pdb_ids = parse_input(args.input_path, args.verbose)
-    # filter PDB IDs by their format validity
-    pdb_ids = check_pdb_ids(pdb_ids, args.error, args.verbose)
 
     # In retry mode process only structures that are not already present in temp results.
     if completed_pdb_ids:
@@ -423,7 +441,8 @@ if __name__ == "__main__":
         pdb_ids = pending_pdb_ids
 
     # create or continue the temp job state before processing structures one by one
-    if not args.retry or query_data is None:
+    persist_progress = not quick_mode
+    if persist_progress and (not use_resume or query_data is None):
         start_job(args)
 
     # ---------------------------------------------------------------------------------------
@@ -433,31 +452,55 @@ if __name__ == "__main__":
     combined_result_data = completed_result_data.copy()
     processed_pdb_ids = set(completed_pdb_ids)
 
-    for pdb_id in pdb_ids:
-        downloaded_pdb_id = download_structure(pdb_id, args.db, args.error, args.verbose)
-        processed_pdb_ids.add(pdb_id)
-        if downloaded_pdb_id is None:
-            update_query_results(combined_result_data, sorted(processed_pdb_ids))
-            continue
+    if quick_mode:
+        downloaded_pdb_ids = batch_download_structures(pdb_ids, args.db, args.error, args.verbose)
+        for pdb_id in downloaded_pdb_ids:
+            processed_pdb_ids.add(pdb_id)
+            filtered_data = filter_ligands([pdb_id])
+            if len(filtered_data) == 0:
+                if args.verbose:
+                    print(f"No significant ligand found in the PDB file {pdb_id}.cif.")
+                continue
 
-        filtered_data = filter_ligands([downloaded_pdb_id])
-        if len(filtered_data) == 0:
-            if args.verbose:
-                print(f"No significant ligand found in the PDB file {downloaded_pdb_id}.cif.")
-            update_query_results(combined_result_data, sorted(processed_pdb_ids))
-            continue
+            _, ligand = filtered_data[0]
+            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose)[0]
+            combined_result_data.append((pdb_id, ligand, lipinski_data))
+    else:
+        for pdb_id in pdb_ids:
+            downloaded_pdb_id = download_structure(pdb_id, args.db, args.error, args.verbose)
+            processed_pdb_ids.add(pdb_id)
+            if downloaded_pdb_id is None:
+                if persist_progress:
+                    update_query_results(combined_result_data, sorted(processed_pdb_ids))
+                continue
 
-        _, ligand = filtered_data[0]
-        lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose)[0]
-        combined_result_data.append((downloaded_pdb_id, ligand, lipinski_data))
-        update_query_results(combined_result_data, sorted(processed_pdb_ids))
+            filtered_data = filter_ligands([downloaded_pdb_id])
+            if len(filtered_data) == 0:
+                if args.verbose:
+                    print(f"No significant ligand found in the PDB file {downloaded_pdb_id}.cif.")
+                if persist_progress:
+                    update_query_results(combined_result_data, sorted(processed_pdb_ids))
+                continue
+
+            _, ligand = filtered_data[0]
+            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose)[0]
+            combined_result_data.append((downloaded_pdb_id, ligand, lipinski_data))
+            if persist_progress:
+                update_query_results(combined_result_data, sorted(processed_pdb_ids))
 
     if len(combined_result_data) == 0:
         raise RuntimeError("No significant ligands were found in the provided input PDBs. Exiting.")
 
-    finish_job()
+    if persist_progress:
+        finish_job()
+    else:
+        export_results(combined_result_data, args.output_name)
 
     if not args.disable_visualisation:
         visualize_results(combined_result_data, compare=args.compare)
 
     # ---------------------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    pipeline()
