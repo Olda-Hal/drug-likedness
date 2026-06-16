@@ -42,7 +42,7 @@ def download_structure(pdb_id: str, db: str,
     # Create a directory for the downloaded structure files if it doesn't exist yet.
     pathlib.Path("downloads").mkdir(exist_ok=True)
 
-    if pathlib.Path(f"downloads/{pdb_id}.cif").exists():  # skip downloading if already downloaded
+    if pathlib.Path(f"downloads/{pdb_id.lower()}.cif").exists():  # skip downloading if already downloaded
         if verbose:
             print(f"Structure with PDB ID {pdb_id} is already downloaded, continuing.")
         return pdb_id
@@ -74,15 +74,22 @@ def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose:
     # Uses quick batch downloader that can crash more easily, but is faster than the single download function.
     
     # skips already downloaded structures
+    to_be_downloaded = []
+    downloaded_files = set(path.stem for path in pathlib.Path("downloads").glob("*.cif"))
+    # remove .cif extension and lower the case from the downloaded file names to get the downloaded pdb_ids
+    downloaded_files = {pdb_id.lower() for pdb_id in downloaded_files}
+    
     for pdb_id in pdb_ids:
-        if pathlib.Path(f"downloads/{pdb_id}.cif").exists():
+        if pdb_id.lower() in downloaded_files:
             if verbose:
                 print(f"Structure with PDB ID {pdb_id} is already downloaded, skipping.")
+        else:
+            to_be_downloaded.append(pdb_id)
     
     # Batch can be only 50 pdb_ids at once, so we need to split the list into chunks of 50.
-    pdb_id_chunks = [pdb_ids[i:i + 50] for i in range(0, len(pdb_ids), 50)]
+    pdb_id_chunks = [to_be_downloaded[i:i + 50] for i in range(0, len(to_be_downloaded), 50)]
 
-    downloaded_pdb_ids = []
+    downloaded_pdb_ids = list(downloaded_files)  # start with already downloaded pdb_ids, and add the newly downloaded ones to this list
     for chunk in pdb_id_chunks:
         files = ":".join(f"{pdb}.cif" for pdb in chunk)
         url = f"https://download.rcsb.org/batch/structures/{files}"

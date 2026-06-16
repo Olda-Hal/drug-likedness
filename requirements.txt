@@ -2,3 +2,4 @@ requests
 gemmi
 matplotlib
 numpy
+rdkit
