@@ -11,8 +11,8 @@ import tempfile
 import zipfile
 from datetime import datetime
 from property_funcs import *
-from turtle import title
 from visualisation import *
+from filtering_funcs import *
 
 # mol weight, hb_donor_count, hb_acceptor_count, hb_donor_count_pubchem, hb_acceptor_count_pubchem, lipophilicity, satisfies_rules
 LipinskiData = tuple[float, int, int, int | None, int | None, float | None, bool]
@@ -72,6 +72,13 @@ def download_structure(pdb_id: str, db: str,
 
 def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose: bool) -> list[str]:
     # Uses quick batch downloader that can crash more easily, but is faster than the single download function.
+    
+    # skips already downloaded structures
+    for pdb_id in pdb_ids:
+        if pathlib.Path(f"downloads/{pdb_id}.cif").exists():
+            if verbose:
+                print(f"Structure with PDB ID {pdb_id} is already downloaded, skipping.")
+    
     # Batch can be only 50 pdb_ids at once, so we need to split the list into chunks of 50.
     pdb_id_chunks = [pdb_ids[i:i + 50] for i in range(0, len(pdb_ids), 50)]
 
@@ -97,54 +104,29 @@ def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose:
     return downloaded_pdb_ids
 
 
-def filter_ligands(pdb_ids: list[str]) -> list[tuple[str, gemmi.Residue]]:
-    result_ligands = []
-    excluded_molecules = {
-        "HOH", "WAT", "DOD",  # water
-        "GOL", "EDO", "DMS", "PEG", "ACT", "EDT",  # common solvents
-        "SO4", "PO4", "CL", "NA", "K", "MG", "CA", "ZN"  # common ions
-    }
-
-    for pdb_id in pdb_ids:
-        pdb_id = pdb_id.lower()
-        if not pathlib.Path(f"downloads/{pdb_id}.cif").is_file():
-            print(f"PDB file for ID {pdb_id} not found in downloads. Skipping.")
-            continue
-        structure = gemmi.read_structure("downloads/" + pdb_id + ".cif")
-        most_significant_ligand = None
-        best_ha_count = 0  # highest heavy atom count
-
-        for model in structure:
-            for chain in model:
-                for residue in chain:
-                    if residue.het_flag == 'H' and residue.name \
-                            not in excluded_molecules:  # it is a ligand
-                        curr_ha_count = 0
-                        for atom in residue:
-                            if not atom.is_hydrogen():
-                                curr_ha_count += 1
-                        if curr_ha_count > best_ha_count:
-                            best_ha_count = curr_ha_count
-                            most_significant_ligand = residue
-
-        if most_significant_ligand is not None:
-            result_ligands.append((pdb_id, most_significant_ligand))
-        else:
-            print(f"No significant ligand found in the PDB file {pdb_id}.cif.")
-
-    return result_ligands
+def filter_ligand(pdb_id: str) -> tuple[str, gemmi.Residue] | None:
+    return extract_best_ligand(pdb_id)
 
 
 def get_lipinski_data(ligands: list[gemmi.Residue], compare: bool,
-                      verbose: bool) -> list[LipinskiData]:
+                      verbose: bool, quick: bool) -> list[LipinskiData]:
     lipinski_data: list[LipinskiData] = []
 
     for ligand in ligands:
         molecular_weight = get_molecular_weight(ligand)
         hb_donor_count = get_hb_donor_count(ligand)
         hb_acceptor_count = get_hb_acceptor_count(ligand)
-        lipophilicity = get_lipophilicity(ligand)
+        if quick:
+            lipophilicity = get_lipophilicity_local(ligand)
+        else:
+            lipophilicity = get_lipophilicity(ligand)
+            lipophilicity_local = get_lipophilicity_local(ligand)
 
+        if lipophilicity is None and lipophilicity_local is not None:
+            lipophilicity = lipophilicity_local
+            if verbose:
+                print(f"Could not load the lipophilicity for ligand {ligand.name} from PubChem, using local calculation instead.")
+        
         violations = 0
         if molecular_weight >= 500:
             violations += 1
@@ -477,14 +459,14 @@ def pipeline():
         downloaded_pdb_ids = batch_download_structures(pdb_ids, args.db, args.error, args.verbose)
         for pdb_id in downloaded_pdb_ids:
             processed_pdb_ids.add(pdb_id)
-            filtered_data = filter_ligands([pdb_id])
-            if len(filtered_data) == 0:
+            filtered_data = filter_ligand(pdb_id)
+            if filtered_data is None:
                 if args.verbose:
                     print(f"No significant ligand found in the PDB file {pdb_id}.cif.")
                 continue
 
-            _, ligand = filtered_data[0]
-            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose)[0]
+            _, ligand = filtered_data
+            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose, args.quick)[0]
             combined_result_data.append((pdb_id, ligand, lipinski_data))
     else:
         for pdb_id in pdb_ids:
@@ -495,16 +477,16 @@ def pipeline():
                     update_query_results(combined_result_data, sorted(processed_pdb_ids))
                 continue
 
-            filtered_data = filter_ligands([downloaded_pdb_id])
-            if len(filtered_data) == 0:
+            filtered_data = filter_ligand(downloaded_pdb_id)
+            if filtered_data is None:
                 if args.verbose:
                     print(f"No significant ligand found in the PDB file {downloaded_pdb_id}.cif.")
                 if persist_progress:
                     update_query_results(combined_result_data, sorted(processed_pdb_ids))
                 continue
 
-            _, ligand = filtered_data[0]
-            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose)[0]
+            _, ligand = filtered_data
+            lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose, args.quick)[0]
             combined_result_data.append((downloaded_pdb_id, ligand, lipinski_data))
             if persist_progress:
                 update_query_results(combined_result_data, sorted(processed_pdb_ids))
