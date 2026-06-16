@@ -1,27 +1,28 @@
 import argparse
-from turtle import title
 import gemmi
+import gzip
+import io
 import json
+import numpy as np
 import pathlib
-import re
 import requests
+import shutil
+import tempfile
+import zipfile
 from datetime import datetime
 from property_funcs import *
-import numpy as np
+from turtle import title
 from visualisation import *
-import tempfile
-import io
-import zipfile
-import gzip
-import shutil
 
 # mol weight, hb_donor_count, hb_acceptor_count, hb_donor_count_pubchem, hb_acceptor_count_pubchem, lipophilicity, satisfies_rules
 LipinskiData = tuple[float, int, int, int | None, int | None, float | None, bool]
+
 TITLES = ["Molecular Weight",
           "Hydrogen Bond Donor Count",
           "Hydrogen Bond Acceptor Count",
-          "Lipophilicity", 
+          "Lipophilicity",
           "Satisfies Lipinski's Rule of Five"]
+
 
 def parse_input(file_path: str, verbose: bool) -> list[str]:
     if pathlib.Path(file_path).is_file():
@@ -35,10 +36,16 @@ def parse_input(file_path: str, verbose: bool) -> list[str]:
 
     raise ValueError("Invalid input file path provided.")
 
+
 def download_structure(pdb_id: str, db: str,
-                        error: bool, verbose: bool) -> str | None:
-    # create a directory for the downloaded structure files if it doesn't exist
+                       error: bool, verbose: bool) -> str | None:
+    # Create a directory for the downloaded structure files if it doesn't exist yet.
     pathlib.Path("downloads").mkdir(exist_ok=True)
+
+    if pathlib.Path(f"downloads/{pdb_id}.cif").exists():  # skip downloading if already downloaded
+        if verbose:
+            print(f"Structure with PDB ID {pdb_id} is already downloaded, continuing.")
+        return pdb_id
 
     if db == "RCSB_PDB":
         url = f"https://files.rcsb.org/download/{pdb_id}.cif"
@@ -52,7 +59,7 @@ def download_structure(pdb_id: str, db: str,
         if verbose:
             print(f"Successfully downloaded structure for PDB ID: {pdb_id}")
         return pdb_id
-    elif error:
+    if error:
         raise ValueError(f"Unable to download PDB with ID: {pdb_id}. Maybe it doesn't exist?")
     elif verbose:
         print(f"Unable to download PDB with ID: {pdb_id}. Maybe it doesn't exist? Skipping.")
@@ -60,9 +67,12 @@ def download_structure(pdb_id: str, db: str,
     if verbose:
         print()
 
-# uses quick batch downloader that can crash more easily, but is faster than the single download function.
+    return None
+
+
 def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose: bool) -> list[str]:
-    # batch can be only 50 pdb_ids at once, so we need to split the list into chunks of 50
+    # Uses quick batch downloader that can crash more easily, but is faster than the single download function.
+    # Batch can be only 50 pdb_ids at once, so we need to split the list into chunks of 50.
     pdb_id_chunks = [pdb_ids[i:i + 50] for i in range(0, len(pdb_ids), 50)]
 
     downloaded_pdb_ids = []
@@ -72,7 +82,7 @@ def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose:
         response = requests.get(url)
         if error:
             response.raise_for_status()
-        
+
         if response.status_code == 200:
             zf = zipfile.ZipFile(io.BytesIO(response.content))
             downloaded_pdb_ids.extend(chunk)
@@ -85,7 +95,7 @@ def batch_download_structures(pdb_ids: list[str], db: str, error: bool, verbose:
                             shutil.copyfileobj(f_in, f_out)
                     pathlib.Path(f"downloads/{name}").unlink()  # remove the gzipped version
     return downloaded_pdb_ids
-    
+
 
 def filter_ligands(pdb_ids: list[str]) -> list[tuple[str, gemmi.Residue]]:
     result_ligands = []
@@ -136,7 +146,7 @@ def get_lipinski_data(ligands: list[gemmi.Residue], compare: bool,
         lipophilicity = get_lipophilicity(ligand)
 
         violations = 0
-        if molecular_weight >= 500: 
+        if molecular_weight >= 500:
             violations += 1
         if lipophilicity is None or lipophilicity > 5:
             violations += 1
@@ -145,7 +155,7 @@ def get_lipinski_data(ligands: list[gemmi.Residue], compare: bool,
         if hb_acceptor_count > 10:
             violations += 1
 
-        satisfies_rules = violations <= 1
+        satisfies_rules = violations <= 1  # needs to have less than 2 violations to satisfy Lipinski's rule of five
 
         if lipophilicity is None:
             print(f"Could not load the lipophilicity for ligand {ligand.name}, will assume lipophilicity > 5.")
@@ -228,11 +238,11 @@ def visualize_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, 
 
     # 1. Data preparation
     names = [item[0] for item in data]
-    
+
     mol_weights = [item[2][0] for item in data]
     hb_donors_local = [item[2][1] for item in data]
     hb_acceptors_local = [item[2][2] for item in data]
-    
+
     # Replace None values with np.nan for safe visualization (will remain completely empty)
     hb_donors_pubchem = [item[2][3] if item[2][3] is not None else np.nan for item in data]
     hb_acceptors_pubchem = [item[2][4] if item[2][4] is not None else np.nan for item in data]
@@ -244,10 +254,12 @@ def visualize_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, 
                     lipinsky_results, compare)
 
 
-# creates a file describing a query from the user. 
-# this file will be deleted after final export. 
-# If any file is found it will be able to continue the previous query in case of an error or a crash.
 def retry_job() -> dict | None:
+    """
+    Creates a file describing a query from the user.
+    This file will be deleted after final export.
+    If any file is found it will be able to continue the previous query in case of an error or a crash.
+    """
     query_path = pathlib.Path(tempfile.gettempdir()) / "drug_likeness_query.json"
     if query_path.exists():
         with open(query_path) as file:
@@ -256,13 +268,15 @@ def retry_job() -> dict | None:
         answer = input().strip().lower()
         if answer == "y":
             return query_data
-        else:
-            query_path.unlink()  # delete the file if the user doesn't want to continue
+        query_path.unlink()  # delete the file if the user doesn't want to continue
 
     return None
 
-# deletes the old tempfile, and overwrites it with the new query data.
+
 def start_job(args: argparse.Namespace) -> None:
+    """
+    Deletes the old tempfile, and overwrites it with the new query data.
+    """
     query_path = pathlib.Path(tempfile.gettempdir()) / "drug_likeness_query.json"
     if query_path.exists():
         query_path.unlink()  # delete old file
@@ -273,9 +287,14 @@ def start_job(args: argparse.Namespace) -> None:
 
     with open(query_path, 'w') as file:
         json.dump(query_data, file, indent=4)
-    
-# exports the results to the output file and deletes the tempfile with the query data, so that it doesn't offer to continue the previous query on the next run.
+
+
 def finish_job() -> None:
+    """
+    Exports the results to the output file and deletes the tempfile
+    with the query data, so that it doesn't offer to continue
+    the previous query on the next run.
+    """
     query_path = pathlib.Path(tempfile.gettempdir()) / "drug_likeness_query.json"
     if query_path.exists():
         with open(query_path) as file:
@@ -286,8 +305,9 @@ def finish_job() -> None:
 
         query_path.unlink()
 
+
 def update_query_results(new_results: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]],
-                        processed_pdb_ids: list[str]) -> None:
+                         processed_pdb_ids: list[str]) -> None:
     query_path = pathlib.Path(tempfile.gettempdir()) / "drug_likeness_query.json"
     if query_path.exists():
         with open(query_path) as file:
@@ -375,6 +395,7 @@ def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.
 
     return completed_data
 
+
 def pipeline():
     # -------------------------------- [ Parsing arguments ] --------------------------------
 
@@ -440,7 +461,7 @@ def pipeline():
                 print(f"Retry mode: skipping {skipped} already processed PDB IDs.")
         pdb_ids = pending_pdb_ids
 
-    # create or continue the temp job state before processing structures one by one
+    # Create or continue the temp job state before processing structures one by one.
     persist_progress = not quick_mode
     if persist_progress and (not use_resume or query_data is None):
         start_job(args)

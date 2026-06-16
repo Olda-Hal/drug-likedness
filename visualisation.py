@@ -3,22 +3,25 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
+
 # Helper function to make zeros visible (assigns small height for visibility)
 def ensure_visible_zeros(values, vis_height):
     return [vis_height if (v is not None and not np.isnan(v) and v == 0) else v for v in values]
+
 
 def draw_limit(ax, limit, max_val, label):
     ax.axhline(y=limit, color='red', linestyle='--', linewidth=2, label=f'{label} ({limit})')
     y_max = max(limit * 1.2, max_val * 1.1) if not np.isnan(max_val) else limit * 1.2
     ax.axhspan(limit, y_max, color='red', alpha=0.1)
     ax.set_ylim(0, y_max)
-    
+
+
 def graph_generator(names: list[str],
                     mol_weights: list[float],
                     hb_donors_local: list[int],
                     hb_acceptors_local: list[int],
-                    hb_donors_pubchem: list[int | None],
-                    hb_acceptors_pubchem: list[int | None],
+                    hb_donors_pubchem: list[int | float],
+                    hb_acceptors_pubchem: list[int | float],
                     lipophilicities: list[float],
                     lipinsky_results: list[bool],
                     compare: bool = False):
@@ -31,11 +34,11 @@ def graph_generator(names: list[str],
     ax3 = fig.add_subplot(gs[1, 0])
     ax4 = fig.add_subplot(gs[1, 1])
     fig.suptitle("Parameter Analysis - Lipinski's Rule of Five", fontsize=16, fontweight='bold')
-    
+
     x = np.arange(len(names))
     width = 0.35
-    
-    # --- PLOT 0: lipinsky compatibility ---
+
+    # --- PLOT 0: Lipinski compatibility ---
     ax0.axis('off')
     legend_handles = [
         Rectangle((0, 0), 1, 1, facecolor='green', edgecolor='black', label='Compliant ligand'),
@@ -53,11 +56,10 @@ def graph_generator(names: list[str],
     legend1 = ax0.legend(handles=legend_handles, loc='upper center', frameon=True, facecolor='white', edgecolor='black')
     ax0.add_artist(legend1)
     ax0.legend(handles=ligand_handles, loc='lower center', frameon=True, facecolor='white', edgecolor='black', title='Ligand list')
-    
 
     # --- PLOT 1: Molecular Weight (Limit <= 500 Da) ---
     # Zero is unlikely for MW, but for safety (e.g., 5 Da for visibility)
-    mw_vis = ensure_visible_zeros(mol_weights, 5.0) 
+    mw_vis = ensure_visible_zeros(mol_weights, 5.0)
     bars = ax1.bar(x, mw_vis, color=["skyblue" if res else "red" for res in lipinsky_results], edgecolor='black', linewidth=0.5)
     for bar, res in zip(bars, lipinsky_results):
         if not res:
@@ -89,8 +91,7 @@ def graph_generator(names: list[str],
     # Replace zeros with visual height 0.1
     hbd_loc_vis = ensure_visible_zeros(hb_donors_local, 0.1)
     hbd_pub_vis = ensure_visible_zeros(hb_donors_pubchem, 0.1)
-    
-    
+
     if compare:
         bars = ax3.bar(x - width/2, hbd_loc_vis, width, label='Local calculation', color=["skyblue" if res else "red" for res in lipinsky_results], edgecolor='black', linewidth=0.5)
         for bar, res in zip(bars, lipinsky_results):
@@ -106,7 +107,7 @@ def graph_generator(names: list[str],
             if not res:
                 bar.set_hatch('///')
     ax3.set_title("Hydrogen Bond Donors", fontsize=12)
-    
+
     max_hbd = max(max(hb_donors_local) if hb_donors_local else 0, max([v for v in hb_donors_pubchem if not np.isnan(v)], default=0))
     draw_limit(ax3, 5, max_hbd, "Ro5 Limit")
     ax3.set_xticks(x)
@@ -117,7 +118,7 @@ def graph_generator(names: list[str],
     # Replace zeros with visual height 0.2
     hba_loc_vis = ensure_visible_zeros(hb_acceptors_local, 0.2)
     hba_pub_vis = ensure_visible_zeros(hb_acceptors_pubchem, 0.2)
-    
+
     if compare:
         bars = ax4.bar(x - width/2, hba_loc_vis, width, label='Local calculation', color=["skyblue" if res else "red" for res in lipinsky_results], edgecolor='black', linewidth=0.5)
         for bar, res in zip(bars, lipinsky_results):
@@ -133,7 +134,7 @@ def graph_generator(names: list[str],
             if not res:
                 bar.set_hatch('///')
     ax4.set_title("Hydrogen Bond Acceptors", fontsize=12)
-    
+
     max_hba = max(max(hb_acceptors_local) if hb_acceptors_local else 0, max([v for v in hb_acceptors_pubchem if not np.isnan(v)], default=0))
     draw_limit(ax4, 10, max_hba, "Ro5 Limit")
     ax4.set_xticks(x)
