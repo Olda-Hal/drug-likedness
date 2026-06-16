@@ -3,6 +3,9 @@ import requests
 import gemmi
 from rdkit.Chem import Crippen
 from rdkit.Chem import rdmolops
+from rdkit import RDLogger
+
+RDLogger.DisableLog('rdApp.*')
 
 
 def get_molecular_weight(ligand: gemmi.Residue) -> float:
@@ -69,37 +72,50 @@ def get_hb_acceptor_count_pubchem(ligand: gemmi.Residue) -> int | None:
 
 def residue_to_rdkit_mol(residue: gemmi.Residue, cutoff=1.9):
     mol = Chem.RWMol()
-    atom_map = {}
-
-    for atom in residue:
-        a = Chem.Atom(atom.element.name)
-        idx = mol.AddAtom(a)
-        atom_map[atom.name] = idx
 
     atoms = list(residue)
 
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            ai, aj = atoms[i], atoms[j]
-            if ai.pos.dist(aj.pos) < cutoff:
-                try:
-                    mol.AddBond(
-                        atom_map[ai.name],
-                        atom_map[aj.name],
-                        Chem.BondType.SINGLE
-                    )
-                except:
-                    pass
+    atom_map = {}
+
+    for i, atom in enumerate(atoms):
+        rd_atom = Chem.Atom(atom.element.name)
+        idx = mol.AddAtom(rd_atom)
+        atom_map[i] = idx
+
+    conf = Chem.Conformer(len(atoms))
+
+    for i, atom in enumerate(atoms):
+        pos = atom.pos
+        conf.SetAtomPosition(i, (pos.x, pos.y, pos.z))
+
+    mol.AddConformer(conf)
+
+    n = len(atoms)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+
+            dist = atoms[i].pos.dist(atoms[j].pos)
+
+            if dist < cutoff:
+                if mol.GetBondBetweenAtoms(i, j) is None:
+                    mol.AddBond(i, j, Chem.BondType.SINGLE)
 
     mol = mol.GetMol()
 
     try:
         Chem.SanitizeMol(mol)
-    except:
-        Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+    except Exception:
+        try:
+            Chem.SanitizeMol(
+                mol,
+                sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES
+            )
+        except Exception:
+            pass
 
     Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-    
+
     return mol
 
 
@@ -130,8 +146,12 @@ def get_aromatic_ring_count(ligand: gemmi.Residue) -> int:
 def get_formal_charge(ligand: gemmi.Residue) -> int:
     mol = residue_to_rdkit_mol(ligand)
     charge = rdmolops.GetFormalCharge(mol)
+    return charge
 
 def get_heavy_atom_count(ligand: gemmi.Residue) -> int:
     mol = residue_to_rdkit_mol(ligand)
     return mol.GetNumHeavyAtoms()
 
+def get_atom_count(ligand: gemmi.Residue) -> int:
+    mol = residue_to_rdkit_mol(ligand)
+    return mol.GetNumAtoms()

@@ -174,12 +174,49 @@ def get_lipinski_data(ligands: list[gemmi.Residue], compare: bool,
 
     return lipinski_data
 
+def verber_filter(ligand: gemmi.Residue) -> bool:
+    heavy_atom_count = get_heavy_atom_count(ligand)
+    rotatable_bond_count = get_rotatable_bond_count(ligand)
+    satisfies_verber = heavy_atom_count <= 10 and rotatable_bond_count <= 5
+    return satisfies_verber
 
-def export_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]],
+def egan_filter(ligand: gemmi.Residue) -> bool:
+    polar_surface_area = get_tolopogical_polar_surface_area(ligand)
+    lipophilicity = get_lipophilicity_local(ligand)
+    satisfies_egan = polar_surface_area <= 140 and lipophilicity is not None and lipophilicity <= 5.88
+    return satisfies_egan
+
+def ghose_filter(ligand: gemmi.Residue) -> bool:
+    molecular_weight = get_molecular_weight(ligand)
+    logp = get_lipophilicity_local(ligand)
+    atom_count = get_atom_count(ligand)
+    satisfies_ghose = (160 <= molecular_weight <= 480 and
+                      -0.4 <= logp <= 5.6 and
+                      20 <= atom_count <= 70)
+    return satisfies_ghose
+
+def Muegge_filter(ligand: gemmi.Residue) -> bool:
+    molecular_weight = get_molecular_weight(ligand)
+    lipophilicity = get_lipophilicity_local(ligand)
+    tpsa = get_tolopogical_polar_surface_area(ligand)
+    hba = get_hb_acceptor_count(ligand)
+    hbd = get_hb_donor_count(ligand)
+    rotatable_bonds = get_rotatable_bond_count(ligand)
+    rings = get_ring_count(ligand)
+    satisfies_muegge = (molecular_weight >= 200 and
+                       lipophilicity is not None and lipophilicity <= 5 and
+                       tpsa <= 150 and
+                       hba <= 10 and
+                       hbd <= 5 and
+                       rotatable_bonds <= 15 and
+                       rings <= 7)
+    return satisfies_muegge
+
+def export_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]],
                    output_filename: str | None) -> None:
     results = []
 
-    for pdb_id, ligand, lipinski_data in data:
+    for pdb_id, ligand, lipinski_data, satisfies_verber, satisfies_egan, satisfies_ghose, satisfies_muegge in data:
         M, D, A, D_pc, A_pc, L, satisfies_rules = lipinski_data
         lipinski_export = {
             "molecular_weight": M,
@@ -201,6 +238,11 @@ def export_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, Lip
             }
             curr_data["pubchem_data"] = pubchem_data
 
+        curr_data["satisfies_verber"] = satisfies_verber
+        curr_data["satisfies_egan"] = satisfies_egan
+        curr_data["satisfies_ghose"] = satisfies_ghose
+        curr_data["satisfies_muegge"] = satisfies_muegge
+
         results.append(curr_data)
 
     pathlib.Path("results").mkdir(parents=True, exist_ok=True)
@@ -213,7 +255,7 @@ def export_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, Lip
         json.dump(results, file, indent=4)
 
 
-def visualize_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]], compare: bool) -> None:
+def visualize_results(data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]], compare: bool) -> None:
     if not data:
         print("No data to visualize.")
         return
@@ -288,20 +330,24 @@ def finish_job() -> None:
         query_path.unlink()
 
 
-def update_query_results(new_results: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]],
+def update_query_results(new_results: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]],
                          processed_pdb_ids: list[str]) -> None:
     query_path = pathlib.Path(tempfile.gettempdir()) / "drug_likeness_query.json"
     if query_path.exists():
         with open(query_path) as file:
             query_data = json.load(file)
         serialized_results = []
-        for pdb_id, ligand, lipinski_data in new_results:
+        for pdb_id, ligand, lipinski_data, satisfies_verber, satisfies_egan, satisfies_ghose, satisfies_muegge in new_results:
             molecular_weight, hb_donor_count, hb_acceptor_count, hb_donor_count_pubchem, hb_acceptor_count_pubchem, lipophilicity, satisfies_rules = lipinski_data
 
             curr_data = {
                 "pdb_id": pdb_id,
                 "ligand_name": ligand.name,
                 "satisfies_lipinski": satisfies_rules,
+                "satisfies_verber": satisfies_verber,
+                "satisfies_egan": satisfies_egan,
+                "satisfies_ghose": satisfies_ghose,
+                "satisfies_muegge": satisfies_muegge,
                 "data": {
                     "molecular_weight": molecular_weight,
                     "hydrogen_bond_donor_count": hb_donor_count,
@@ -324,7 +370,7 @@ def update_query_results(new_results: list[tuple[str, gemmi.Residue | argparse.N
             json.dump(query_data, file, indent=4)
 
 
-def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]]:
+def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]]:
     if not query_data:
         return []
 
@@ -332,7 +378,7 @@ def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.
     if not isinstance(completed_raw, list):
         return []
 
-    completed_data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]] = []
+    completed_data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]] = []
     for item in completed_raw:
         if not isinstance(item, dict):
             continue
@@ -354,6 +400,10 @@ def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.
             lipophilicity_raw = data.get("lipophilicity")
             lipophilicity = None if lipophilicity_raw is None else float(lipophilicity_raw)
             satisfies_rules = bool(item["satisfies_lipinski"])
+            satisfies_verber = bool(item["satisfies_verber"])
+            satisfies_egan = bool(item["satisfies_egan"])
+            satisfies_ghose = bool(item["satisfies_ghose"])
+            satisfies_muegge = bool(item["satisfies_muegge"])
         except (KeyError, TypeError, ValueError):
             continue
 
@@ -373,7 +423,7 @@ def get_completed_result_data(query_data: dict | None) -> list[tuple[str, gemmi.
         )
 
         # For resumed results we only need a name-like object for export formatting.
-        completed_data.append((pdb_id, argparse.Namespace(name=ligand_name), lipinski_data))
+        completed_data.append((pdb_id, argparse.Namespace(name=ligand_name), lipinski_data, satisfies_verber, satisfies_egan, satisfies_ghose, satisfies_muegge))
 
     return completed_data
 
@@ -405,7 +455,7 @@ def pipeline():
     args = parser.parse_args()
     quick_mode = args.quick
     query_data: dict | None = None
-    completed_result_data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData]] = []
+    completed_result_data: list[tuple[str, gemmi.Residue | argparse.Namespace, LipinskiData, bool, bool, bool, bool]] = []
     completed_pdb_ids: set[str] = set()
 
     # ---------------------------------------------------------------------------------------
@@ -467,7 +517,11 @@ def pipeline():
 
             _, ligand = filtered_data
             lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose, args.quick)[0]
-            combined_result_data.append((pdb_id, ligand, lipinski_data))
+            satisfies_verber = verber_filter(ligand)
+            satisfies_egan = egan_filter(ligand)
+            satisfies_ghose = ghose_filter(ligand)
+            satisfies_muegge = Muegge_filter(ligand)
+            combined_result_data.append((pdb_id, ligand, lipinski_data, satisfies_verber, satisfies_egan, satisfies_ghose, satisfies_muegge))
     else:
         for pdb_id in pdb_ids:
             downloaded_pdb_id = download_structure(pdb_id, args.db, args.error, args.verbose)
@@ -487,7 +541,11 @@ def pipeline():
 
             _, ligand = filtered_data
             lipinski_data = get_lipinski_data([ligand], args.compare, args.verbose, args.quick)[0]
-            combined_result_data.append((downloaded_pdb_id, ligand, lipinski_data))
+            satisfies_verber = verber_filter(ligand)
+            satisfies_egan = egan_filter(ligand)
+            satisfies_ghose = ghose_filter(ligand)
+            satisfies_muegge = Muegge_filter(ligand)
+            combined_result_data.append((downloaded_pdb_id, ligand, lipinski_data, satisfies_verber, satisfies_egan, satisfies_ghose, satisfies_muegge))
             if persist_progress:
                 update_query_results(combined_result_data, sorted(processed_pdb_ids))
 
